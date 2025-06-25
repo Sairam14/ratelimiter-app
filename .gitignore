@@ -1,0 +1,33 @@
+# Binaries
+ratelimiter-app
+
+# Build output
+/build/
+/dist/
+
+# Dependency directories
+/vendor/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Test cache
+*.test
+
+# Go coverage files
+coverage.out
+
+# Docker
+*.env
+
+# Ignore by default
+.env
