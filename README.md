@@ -1,7 +1,7 @@
-# ratelimiter app
+# Ratelimiter Application Service
 
 ## Overview
-This project is a simple Go web application that demonstrates the use of HTTP handlers, service logic, and Redis for data storage. It is structured to separate concerns between the command line interface, service logic, and internal handling of requests.
+This project is a Go web application that demonstrates scalable, distributed **rate limiting** using both in-memory and Redis-backed algorithms. It supports token bucket and leaky bucket strategies, configurable per-user and per-API-key limits, and is designed for high concurrency and horizontal scalability. The app exposes HTTP endpoints for acquiring tokens, checking rate limit status, Prometheus metrics, and includes an admin UI for visualization. It is structured to separate concerns between the command line interface, service logic, and HTTP handlers, making it easy to extend and integrate into real-world API gateways or backend services.
 
 ## Architecture Design
 The application is organized into three main directories:
