@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,8 +26,9 @@ const (
 )
 
 type Service struct {
-	mu          sync.Mutex
-	userCalls   sync.Map // concurrent map for user calls
+	mu          sync.RWMutex // Use RWMutex for concurrent reads/writes
+	userCalls   sync.Map
+	userLocks   sync.Map // map[string]*sync.Mutex
 	limit       int
 	window      time.Duration
 	limits      map[string]int // key: user or API key, value: limit
@@ -83,9 +85,9 @@ func NewService(algorithm RateLimitAlgorithm) *Service {
 func (s *Service) Acquire(ctx context.Context, input map[string]interface{}) map[string]interface{} {
 	key, ok := input["key"].(string)
 	if !ok || key == "" {
-		s.mu.Lock()
-		s.failedAcquires++
-		s.mu.Unlock()
+
+		atomic.LoadInt64(&s.failedAcquires)
+
 		return map[string]interface{}{
 			"allowed": false,
 			"error":   "missing or invalid key",
@@ -146,6 +148,12 @@ func (s *Service) acquireTokenBucket(ctx context.Context, key string) map[string
 		}
 	}
 
+	// Per-key locking to avoid data races
+	lockIface, _ := s.userLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := lockIface.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	now := time.Now()
 	limit := s.getLimitForKey(key)
 
@@ -160,7 +168,7 @@ func (s *Service) acquireTokenBucket(ctx context.Context, key string) map[string
 		}
 	}
 	if len(recentCalls) >= limit {
-		s.failedAcquires++
+		atomic.AddInt64(&s.failedAcquires, 1)
 		return map[string]interface{}{
 			"allowed": false,
 			"error":   "rate limit exceeded",
@@ -168,13 +176,19 @@ func (s *Service) acquireTokenBucket(ctx context.Context, key string) map[string
 	}
 	recentCalls = append(recentCalls, now)
 	s.userCalls.Store(key, recentCalls)
-	s.successfulAcquires++
+	atomic.AddInt64(&s.successfulAcquires, 1)
 	return map[string]interface{}{
 		"allowed": true,
 	}
 }
 
 func (s *Service) acquireLeakyBucket(ctx context.Context, key string) map[string]interface{} {
+	// Per-key locking to avoid data races
+	lockIface, _ := s.userLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := lockIface.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	now := time.Now()
 	limit := s.getLimitForKey(key)
 	interval := s.window / time.Duration(limit)
@@ -296,14 +310,12 @@ func (s *Service) ExampleMethod(input string) string {
 
 // Add a method to get metrics in Prometheus format
 func (s *Service) Metrics() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return `# HELP ratelimiter_successful_acquires Number of successful acquire attempts
 # TYPE ratelimiter_successful_acquires counter
-ratelimiter_successful_acquires ` + itoa(s.successfulAcquires) + `
+ratelimiter_successful_acquires ` + itoa(atomic.LoadInt64(&s.successfulAcquires)) + `
 # HELP ratelimiter_failed_acquires Number of failed acquire attempts
 # TYPE ratelimiter_failed_acquires counter
-ratelimiter_failed_acquires ` + itoa(s.failedAcquires) + `
+ratelimiter_failed_acquires ` + itoa(atomic.LoadInt64(&s.failedAcquires)) + `
 # HELP ratelimiter_requests_last_second Requests in the last second
 # TYPE ratelimiter_requests_last_second gauge
 ratelimiter_requests_last_second ` + itoa(s.requestsLastSecond) + `
@@ -326,8 +338,8 @@ func (s *Service) SetLimit(key string, limit int) {
 }
 
 func (s *Service) getLimitForKey(key string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if l, ok := s.limits[key]; ok {
 		return l
 	}
